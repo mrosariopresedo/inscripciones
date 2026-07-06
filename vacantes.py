@@ -64,7 +64,7 @@ MATERIAS_OBJETIVO = {
 
 # Los 3 intensivos de Pinamar YA tienen vacante y no te interesan (sacaste el
 # turno INTENSIVO). Si True, los omite para no spamear. Poner False para verlos.
-EXCLUIR_INTENSIVOS = False  # TEMPORAL: prueba de aviso. Volver a True despues.
+EXCLUIR_INTENSIVOS = True
 
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')

@@ -1,0 +1,40 @@
+name: Monitor de vacantes UADE
+# Nota: los avisos amarillos sobre "secrets" son normales hasta cargarlos en GitHub.
+
+# Corre en la nube cada ~15 min. OJO: el cron de GitHub Actions no es exacto
+# (puede demorarse varios minutos si hay cola), pero para vigilar vacantes
+# alcanza. Tambien se puede disparar a mano desde la pestania Actions.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  vacantes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Traer el repo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Instalar dependencias
+        run: pip install selenium beautifulsoup4 requests
+
+      - name: Ejecutar barrido
+        env:
+          # Secrets a cargar en el repo: Settings -> Secrets and variables ->
+          # Actions -> New repository secret
+          UADE_USER: ${{ secrets.UADE_USER }}
+          UADE_PASS: ${{ secrets.UADE_PASS }}
+          PARAM_URL: ${{ secrets.PARAM_URL }}
+          WHATSAPP_TELEFONO: ${{ secrets.WHATSAPP_TELEFONO }}
+          WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+        run: python vacantes.py

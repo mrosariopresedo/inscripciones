@@ -1,0 +1,8 @@
+# Plantilla. Copiar a run_local.ps1 y completar con tus datos.
+# run_local.ps1 esta en .gitignore para no subir secretos.
+$env:UADE_USER         = 'usuario@uade.edu.ar'
+$env:UADE_PASS         = 'tu-contrasenia'
+$env:PARAM_URL         = 'https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=...'
+$env:WHATSAPP_TELEFONO = '549XXXXXXXXXX'
+$env:WHATSAPP_APIKEY   = 'tu-apikey'
+python vacantes.py

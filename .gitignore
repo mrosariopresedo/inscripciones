@@ -1,0 +1,14 @@
+# entornos / temporales
+venv/
+__pycache__/
+*.pyc
+
+# secretos locales — NUNCA subir
+run_local.ps1
+.env
+
+# documentos personales y fuentes con datos de sesion — no versionar
+*.pdf
+*.html
+CLAUDE.md
+[0-9][0-9]_*.md

@@ -64,7 +64,7 @@ MATERIAS_OBJETIVO = {
 
 # Los 3 intensivos de Pinamar YA tienen vacante y no te interesan (sacaste el
 # turno INTENSIVO). Si True, los omite para no spamear. Poner False para verlos.
-EXCLUIR_INTENSIVOS = True
+EXCLUIR_INTENSIVOS = False  # TEMPORAL: prueba de aviso. Volver a True despues.
 
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
@@ -181,7 +181,8 @@ def barrido(browser):
     sleep(3)
     if 'Request Rejected' in browser.page_source:
         raise RuntimeError("El WAF rechazo la entrada: el param no es valido/vigente.")
-    seleccionar_materias_objetivo(browser)
+    if seleccionar_materias_objetivo(browser) == 0:
+        raise RuntimeError("No se selecciono ninguna materia (param vencido o auth fallida?).")
     hallazgos = {}
     for valor, nombre in TURNOS.items():
         try:

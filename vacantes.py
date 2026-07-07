@@ -206,6 +206,7 @@ def barrido(browser):
         raise Bloqueo("no pude entrar ni seleccionar materias (param vencido o bloqueo?).")
     procesadas = set()
     resultados = []
+    errores = 0
     for valor, nombre in TURNOS.items():
         try:
             esperar_overlay(browser)
@@ -215,13 +216,22 @@ def barrido(browser):
                 "arguments[0].click()",
                 browser.find_element(By.ID, 'ContentPlaceHolder1_btnBuscar'))
             sleep(5)
+            if es_bloqueo(browser.page_source):
+                raise Bloqueo("el portal rechazo la busqueda (WAF).")
             for clave, (desc, vac, det) in leer_grilla(browser.page_source).items():
                 if clave in procesadas:
                     continue
                 procesadas.add(clave)
                 resultados.append((desc, vac, det))
+        except Bloqueo:
+            raise
         except Exception as e:
-            print(f"Turno {nombre}: sin resultados o error ({e})")
+            errores += 1
+            print(f"Turno {nombre}: error ({e})")
+    # Si algun turno fallo y no encontramos NADA, NO digamos "sin vacantes": puede
+    # haber cupo que no vimos. Fallamos para que el workflow reintente.
+    if errores and not resultados:
+        raise RuntimeError(f"{errores} turno(s) fallaron sin resultados; reintentar.")
     return resultados
 
 
@@ -235,15 +245,18 @@ def validar_config():
 
 
 def main():
-    validar_config()
-    browser = armar_browser()
+    browser = None
     try:
+        validar_config()
+        browser = armar_browser()
         resultados = barrido(browser)
         if resultados:
-            for desc, vac, detalle in resultados:
+            for i, (desc, vac, detalle) in enumerate(resultados):
                 msg = f"Se libero cupo en {desc}: {vac}. Anda a inscribirte. [{detalle}]"
                 print(msg)
                 send_msg(msg)
+                if i < len(resultados) - 1:
+                    sleep(5)   # separar los WhatsApp (rate limit de CallMeBot)
         else:
             print("Barrido ok: sin vacantes nuevas en las materias objetivo.")
     except Bloqueo as e:
@@ -256,7 +269,8 @@ def main():
         print(f"Error transitorio en el barrido: {e}")
         sys.exit(1)          # exit 1 = error transitorio -> el workflow reintenta
     finally:
-        browser.quit()
+        if browser is not None:
+            browser.quit()
 
 
 if __name__ == '__main__':

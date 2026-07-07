@@ -1,18 +1,22 @@
 name: Monitor de vacantes UADE
-# Nota: los avisos amarillos sobre "secrets" son normales hasta cargarlos en GitHub.
+# El cron de GitHub es throttleado y poco frecuente. En vez de depender de el,
+# cada corrida se AUTO-REPITE: hace un barrido cada 15 min durante ~5,5 h. El cron
+# la dispara varias veces al dia y cancel-in-progress evita que se solapen.
+# (Repo publico => minutos de Actions ilimitados y gratis.)
 
-# Corre en la nube cada ~15 min. OJO: el cron de GitHub Actions no es exacto
-# (puede demorarse varios minutos si hay cola), pero para vigilar vacantes
-# alcanza. Tambien se puede disparar a mano desde la pestania Actions.
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0 */4 * * *'   # cada 4 h (best-effort); cada disparo cubre ~5,5 h
   workflow_dispatch:
+
+concurrency:
+  group: monitor-vacantes
+  cancel-in-progress: true
 
 jobs:
   vacantes:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350
     steps:
       - name: Traer el repo
         uses: actions/checkout@v4
@@ -28,13 +32,19 @@ jobs:
       - name: Instalar dependencias
         run: pip install selenium beautifulsoup4 requests
 
-      - name: Ejecutar barrido
+      - name: Barridos cada 15 min (~5,5 h)
         env:
-          # Secrets a cargar en el repo: Settings -> Secrets and variables ->
-          # Actions -> New repository secret
           UADE_USER: ${{ secrets.UADE_USER }}
           UADE_PASS: ${{ secrets.UADE_PASS }}
           PARAM_URL: ${{ secrets.PARAM_URL }}
+          CONFIRMAR_URL: ${{ secrets.CONFIRMAR_URL }}
           WHATSAPP_TELEFONO: ${{ secrets.WHATSAPP_TELEFONO }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
-        run: python vacantes.py
+        run: |
+          fin=$((SECONDS + 19800))   # ~5,5 h
+          fallos=0
+          while [ $SECONDS -lt $fin ]; do
+            if python vacantes.py; then fallos=0; else fallos=$((fallos + 1)); fi
+            if [ $fallos -ge 3 ]; then echo "3 fallos seguidos: corto la corrida"; exit 1; fi
+            sleep 900
+          done

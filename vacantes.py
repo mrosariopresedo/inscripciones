@@ -62,9 +62,19 @@ MATERIAS_OBJETIVO = {
     '3.4.217': 'Ciencia de Datos',
 }
 
-# Los 3 intensivos de Pinamar YA tienen vacante y no te interesan (sacaste el
-# turno INTENSIVO). Si True, los omite para no spamear. Poner False para verlos.
+# Excluir clases que contengan estas palabras en su detalle (sede/modalidad).
+# Los intensivos de Pinamar/Costa Argentina no te interesan.
 EXCLUIR_INTENSIVOS = True
+EXCLUIR_KEYWORDS = ('INTENSIVO', 'PINAMAR', 'COSTA ARGENTINA', 'NAMAR')
+
+# Si True, cuando encuentra una clase elegible con cupo la agrega al carrito
+# (accion reversible). NUNCA aprieta "Confirmar carrito" ni "Finalizar": eso
+# queda para vos. Si el agregado falla, igual te avisa por WhatsApp.
+AUTO_CARRITO = True
+
+# Link directo a Confirmar/Finalizar (opcional, secret CONFIRMAR_URL). Se incluye
+# en el WhatsApp para que entres directo desde el celu (te va a pedir login).
+CONFIRMAR_URL = os.environ.get('CONFIRMAR_URL', '')
 
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
@@ -140,9 +150,10 @@ def seleccionar_materias_objetivo(browser):
 
 
 def leer_grilla(html):
-    """Devuelve dict num_clase -> (desc, vacantes, detalle) de materias objetivo
-    con cupo > 0. La vacante esta en <td class="tdvacantes"> (lblVacantesLibresAI);
-    el id trae grdClases_N que mapea a lblMateriaDescripcion_N."""
+    """Devuelve dict num_clase -> (desc, vacantes, detalle, cart_id) de materias
+    objetivo con cupo > 0. La vacante esta en <td class="tdvacantes">
+    (lblVacantesLibresAI); el id trae grdClases_N -> lblMateriaDescripcion_N.
+    cart_id = id del boton para agregar la clase al carrito (btnCarritoAlta)."""
     soup = BeautifulSoup(html, 'html.parser')
     hallazgos = {}
     for td in soup.select('td.tdvacantes'):
@@ -165,13 +176,44 @@ def leer_grilla(html):
             continue
         fila = td.find_parent('tr')
         detalle = ' '.join(fila.get_text(' ', strip=True).split()) if fila else ''
-        if EXCLUIR_INTENSIVOS and ('INTENSIVO' in detalle.upper() or 'PINAMAR' in detalle.upper()):
+        if EXCLUIR_INTENSIVOS and any(k in detalle.upper() for k in EXCLUIR_KEYWORDS):
             continue
+        cart = fila.find('input', id=re.compile(r'btnCarritoAlta')) if fila else None
+        cart_id = cart.get('id') if cart else None
         # numero de clase = primer numero de 3+ digitos del detalle (dedupe key)
         mnum = re.search(r'\b(\d{3,})\b', detalle)
         clave = mnum.group(1) if mnum else detalle[:20]
-        hallazgos[clave] = (desc, vac, detalle)
+        hallazgos[clave] = (desc, vac, detalle, cart_id)
     return hallazgos
+
+
+def agregar_al_carrito(browser, cart_id):
+    """Clickea el boton de carrito de la clase y acepta el dialogo de
+    confirmacion de AGREGADO (reversible). NO toca 'Confirmar carrito' ni
+    'Finalizar'. Devuelve True si no hubo error. Best-effort: el dialogo exacto
+    para clases regulares no se pudo testear (hoy solo hay cupo en intensivos)."""
+    try:
+        btn = browser.find_element(By.ID, cart_id)
+        browser.execute_script("arguments[0].click()", btn)
+        sleep(3)
+        # Aceptar SOLO el dialogo de agregar al carrito (no confirmar/finalizar).
+        for x in browser.find_elements(By.XPATH, "//*[contains(@class,'ui-button')]"):
+            if not x.is_displayed():
+                continue
+            t = x.text.strip().lower()
+            if any(p in t for p in ('confirmar carrito', 'finalizar')):
+                continue
+            if t in ('aceptar', 'confirmar', 'si', 'agregar', 'ok', 'agregar al carrito'):
+                try:
+                    x.click()
+                except Exception:
+                    pass
+                break
+        sleep(2)
+        return 'Request Rejected' not in browser.page_source
+    except Exception as e:
+        print(f"No pude agregar al carrito ({cart_id}): {e}")
+        return False
 
 
 def barrido(browser):
@@ -183,7 +225,8 @@ def barrido(browser):
         raise RuntimeError("El WAF rechazo la entrada: el param no es valido/vigente.")
     if seleccionar_materias_objetivo(browser) == 0:
         raise RuntimeError("No se selecciono ninguna materia (param vencido o auth fallida?).")
-    hallazgos = {}
+    procesadas = set()
+    resultados = []
     for valor, nombre in TURNOS.items():
         try:
             esperar_overlay(browser)
@@ -193,10 +236,15 @@ def barrido(browser):
                 "arguments[0].click()",
                 browser.find_element(By.ID, 'ContentPlaceHolder1_btnBuscar'))
             sleep(5)
-            hallazgos.update(leer_grilla(browser.page_source))  # dedupe por num clase
+            for clave, (desc, vac, det, cart_id) in leer_grilla(browser.page_source).items():
+                if clave in procesadas:
+                    continue
+                procesadas.add(clave)
+                agregada = agregar_al_carrito(browser, cart_id) if (AUTO_CARRITO and cart_id) else False
+                resultados.append((desc, vac, det, agregada))
         except Exception as e:
             print(f"Turno {nombre}: sin resultados o error ({e})")
-    return hallazgos
+    return resultados
 
 
 def validar_config():
@@ -212,10 +260,16 @@ def main():
     validar_config()
     browser = armar_browser()
     try:
-        hallazgos = barrido(browser)
-        if hallazgos:
-            for desc, vac, detalle in hallazgos.values():
-                msg = f"VACANTE en {desc}: {vac} cupos. {detalle}"
+        resultados = barrido(browser)
+        if resultados:
+            for desc, vac, detalle, agregada in resultados:
+                if agregada:
+                    accion = "YA la agregue a tu carrito"
+                    link = f" Entra a confirmar: {CONFIRMAR_URL}" if CONFIRMAR_URL else " Entra al portal -> Confirmar carrito -> aceptar terminos -> Finalizar."
+                else:
+                    accion = "anda a inscribirte YA (no pude cargar el carrito)"
+                    link = ""
+                msg = f"Se libero cupo en {desc}: {vac}. {accion}.{link} [{detalle}]"
                 print(msg)
                 send_msg(msg)
         else:

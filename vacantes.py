@@ -75,6 +75,22 @@ UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
 
 
+class Bloqueo(Exception):
+    """El portal rechazo el acceso (WAF / 401 / 403 / param vencido)."""
+
+
+# Senales de que el portal nos bloqueo o rechazo (case-insensitive).
+BLOQUEO_SIGNALS = (
+    'request rejected', 'requested url was rejected', 'access denied',
+    '403 - forbidden', '403 forbidden', '401 - unauthorized', '401 unauthorized',
+)
+
+
+def es_bloqueo(html):
+    h = html.lower()
+    return any(s in h for s in BLOQUEO_SIGNALS)
+
+
 def send_msg(message):
     """Manda un WhatsApp via CallMeBot. requests encodea el texto solo."""
     try:
@@ -184,10 +200,10 @@ def barrido(browser):
         raise RuntimeError("Falta PARAM_URL (la URL con ?param= del 2026).")
     browser.get(PARAM_URL)
     sleep(3)
-    if 'Request Rejected' in browser.page_source:
-        raise RuntimeError("El WAF rechazo la entrada: el param no es valido/vigente.")
+    if es_bloqueo(browser.page_source):
+        raise Bloqueo("el portal rechazo el acceso (WAF / 401 / 403).")
     if seleccionar_materias_objetivo(browser) == 0:
-        raise RuntimeError("No se selecciono ninguna materia (param vencido o auth fallida?).")
+        raise Bloqueo("no pude entrar ni seleccionar materias (param vencido o bloqueo?).")
     procesadas = set()
     resultados = []
     for valor, nombre in TURNOS.items():
@@ -230,10 +246,15 @@ def main():
                 send_msg(msg)
         else:
             print("Barrido ok: sin vacantes nuevas en las materias objetivo.")
+    except Bloqueo as e:
+        aviso = (f"ALERTA monitor UADE: posible BLOQUEO del portal ({e}) "
+                 "El monitor se frena. Revisa tu acceso y reintenta mas tarde.")
+        print(aviso)
+        send_msg(aviso)
+        sys.exit(2)          # exit 2 = bloqueo -> el workflow corta la corrida
     except Exception as e:
-        print(f"Error en el barrido: {e}")
-        send_msg(f"El monitor de vacantes UADE tuvo un error: {e}")
-        sys.exit(1)
+        print(f"Error transitorio en el barrido: {e}")
+        sys.exit(1)          # exit 1 = error transitorio -> el workflow reintenta
     finally:
         browser.quit()
 

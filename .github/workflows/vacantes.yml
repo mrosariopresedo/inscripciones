@@ -1,17 +1,19 @@
 name: Monitor de vacantes UADE
 # El cron de GitHub es throttleado y poco frecuente. En vez de depender de el,
-# cada corrida se AUTO-REPITE: hace un barrido cada 15 min durante ~5,5 h. El cron
-# la dispara varias veces al dia y cancel-in-progress evita que se solapen.
-# (Repo publico => minutos de Actions ilimitados y gratis.)
+# cada corrida se AUTO-REPITE: hace un barrido cada ~5 min durante ~5,5 h. El cron
+# la relanza varias veces al dia. (Repo publico => minutos ilimitados y gratis.)
+#
+# cancel-in-progress: false a proposito -> las corridas NO se matan entre si (los
+# disparos extra hacen cola). Asi no quedan huecos sin monitorear.
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # cada 4 h (best-effort); cada disparo cubre ~5,5 h
+    - cron: '0 */3 * * *'   # cada 3 h (best-effort) para relanzar el loop
   workflow_dispatch:
 
 concurrency:
   group: monitor-vacantes
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   vacantes:
@@ -32,12 +34,11 @@ jobs:
       - name: Instalar dependencias
         run: pip install selenium beautifulsoup4 requests
 
-      - name: Barridos cada 15 min (~5,5 h)
+      - name: Barridos cada 5 min (~5,5 h)
         env:
           UADE_USER: ${{ secrets.UADE_USER }}
           UADE_PASS: ${{ secrets.UADE_PASS }}
           PARAM_URL: ${{ secrets.PARAM_URL }}
-          CONFIRMAR_URL: ${{ secrets.CONFIRMAR_URL }}
           WHATSAPP_TELEFONO: ${{ secrets.WHATSAPP_TELEFONO }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
         run: |
@@ -45,6 +46,6 @@ jobs:
           fallos=0
           while [ $SECONDS -lt $fin ]; do
             if python vacantes.py; then fallos=0; else fallos=$((fallos + 1)); fi
-            if [ $fallos -ge 3 ]; then echo "3 fallos seguidos: corto la corrida"; exit 1; fi
-            sleep 900
+            if [ $fallos -ge 5 ]; then echo "5 fallos seguidos: corto la corrida"; exit 1; fi
+            sleep 300
           done

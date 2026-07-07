@@ -15,7 +15,8 @@ Monitor de vacantes UADE — version para GitHub Actions (headless, sin PC prend
 
 Validado el 2026-07-06: detecta bien las vacantes (los 3 intensivos daban 20/16/18).
 
-El cron del workflow repite el barrido cada ~15 min: aca NO hay while True.
+Modo SOLO AVISO: detecta cupo y manda WhatsApp. No toca el carrito ni inscribe.
+El workflow repite el barrido en loop (cada ~5 min): aca NO hay while True.
 """
 import os
 import re
@@ -67,14 +68,8 @@ MATERIAS_OBJETIVO = {
 EXCLUIR_INTENSIVOS = True
 EXCLUIR_KEYWORDS = ('INTENSIVO', 'PINAMAR', 'COSTA ARGENTINA', 'NAMAR')
 
-# Si True, cuando encuentra una clase elegible con cupo la agrega al carrito
-# (accion reversible). NUNCA aprieta "Confirmar carrito" ni "Finalizar": eso
-# queda para vos. Si el agregado falla, igual te avisa por WhatsApp.
-AUTO_CARRITO = True
-
-# Link directo a Confirmar/Finalizar (opcional, secret CONFIRMAR_URL). Se incluye
-# en el WhatsApp para que entres directo desde el celu (te va a pedir login).
-CONFIRMAR_URL = os.environ.get('CONFIRMAR_URL', '')
+# El monitor SOLO avisa: detecta el cupo y manda WhatsApp. No toca el carrito ni
+# se inscribe (eso lo hacas vos a mano en el portal).
 
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
@@ -150,10 +145,9 @@ def seleccionar_materias_objetivo(browser):
 
 
 def leer_grilla(html):
-    """Devuelve dict num_clase -> (desc, vacantes, detalle, cart_id) de materias
-    objetivo con cupo > 0. La vacante esta en <td class="tdvacantes">
-    (lblVacantesLibresAI); el id trae grdClases_N -> lblMateriaDescripcion_N.
-    cart_id = id del boton para agregar la clase al carrito (btnCarritoAlta)."""
+    """Devuelve dict num_clase -> (desc, vacantes, detalle) de materias objetivo
+    con cupo > 0. La vacante esta en <td class="tdvacantes"> (lblVacantesLibresAI);
+    el id trae grdClases_N -> lblMateriaDescripcion_N."""
     soup = BeautifulSoup(html, 'html.parser')
     hallazgos = {}
     for td in soup.select('td.tdvacantes'):
@@ -178,42 +172,11 @@ def leer_grilla(html):
         detalle = ' '.join(fila.get_text(' ', strip=True).split()) if fila else ''
         if EXCLUIR_INTENSIVOS and any(k in detalle.upper() for k in EXCLUIR_KEYWORDS):
             continue
-        cart = fila.find('input', id=re.compile(r'btnCarritoAlta')) if fila else None
-        cart_id = cart.get('id') if cart else None
         # numero de clase = primer numero de 3+ digitos del detalle (dedupe key)
         mnum = re.search(r'\b(\d{3,})\b', detalle)
         clave = mnum.group(1) if mnum else detalle[:20]
-        hallazgos[clave] = (desc, vac, detalle, cart_id)
+        hallazgos[clave] = (desc, vac, detalle)
     return hallazgos
-
-
-def agregar_al_carrito(browser, cart_id):
-    """Clickea el boton de carrito de la clase y acepta el dialogo de
-    confirmacion de AGREGADO (reversible). NO toca 'Confirmar carrito' ni
-    'Finalizar'. Devuelve True si no hubo error. Best-effort: el dialogo exacto
-    para clases regulares no se pudo testear (hoy solo hay cupo en intensivos)."""
-    try:
-        btn = browser.find_element(By.ID, cart_id)
-        browser.execute_script("arguments[0].click()", btn)
-        sleep(3)
-        # Aceptar SOLO el dialogo de agregar al carrito (no confirmar/finalizar).
-        for x in browser.find_elements(By.XPATH, "//*[contains(@class,'ui-button')]"):
-            if not x.is_displayed():
-                continue
-            t = x.text.strip().lower()
-            if any(p in t for p in ('confirmar carrito', 'finalizar')):
-                continue
-            if t in ('aceptar', 'confirmar', 'si', 'agregar', 'ok', 'agregar al carrito'):
-                try:
-                    x.click()
-                except Exception:
-                    pass
-                break
-        sleep(2)
-        return 'Request Rejected' not in browser.page_source
-    except Exception as e:
-        print(f"No pude agregar al carrito ({cart_id}): {e}")
-        return False
 
 
 def barrido(browser):
@@ -236,12 +199,11 @@ def barrido(browser):
                 "arguments[0].click()",
                 browser.find_element(By.ID, 'ContentPlaceHolder1_btnBuscar'))
             sleep(5)
-            for clave, (desc, vac, det, cart_id) in leer_grilla(browser.page_source).items():
+            for clave, (desc, vac, det) in leer_grilla(browser.page_source).items():
                 if clave in procesadas:
                     continue
                 procesadas.add(clave)
-                agregada = agregar_al_carrito(browser, cart_id) if (AUTO_CARRITO and cart_id) else False
-                resultados.append((desc, vac, det, agregada))
+                resultados.append((desc, vac, det))
         except Exception as e:
             print(f"Turno {nombre}: sin resultados o error ({e})")
     return resultados
@@ -262,14 +224,8 @@ def main():
     try:
         resultados = barrido(browser)
         if resultados:
-            for desc, vac, detalle, agregada in resultados:
-                if agregada:
-                    accion = "YA la agregue a tu carrito"
-                    link = f" Entra a confirmar: {CONFIRMAR_URL}" if CONFIRMAR_URL else " Entra al portal -> Confirmar carrito -> aceptar terminos -> Finalizar."
-                else:
-                    accion = "anda a inscribirte YA (no pude cargar el carrito)"
-                    link = ""
-                msg = f"Se libero cupo en {desc}: {vac}. {accion}.{link} [{detalle}]"
+            for desc, vac, detalle in resultados:
+                msg = f"Se libero cupo en {desc}: {vac}. Anda a inscribirte. [{detalle}]"
                 print(msg)
                 send_msg(msg)
         else:

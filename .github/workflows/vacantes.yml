@@ -34,36 +34,14 @@ jobs:
       - name: Instalar dependencias
         run: pip install selenium beautifulsoup4 requests
 
-      - name: Barridos cada ~1 min (~5,5 h)
+      - name: Monitorear (~5,5 h, loop interno)
+        # El loop, el intervalo y el manejo de errores/bloqueo/avisos viven dentro
+        # de vacantes.py (un solo Chrome para todos los barridos). El workflow solo
+        # lo lanza; el schedule lo relanza cuando termina.
         env:
           UADE_USER: ${{ secrets.UADE_USER }}
           UADE_PASS: ${{ secrets.UADE_PASS }}
           PARAM_URL: ${{ secrets.PARAM_URL }}
           WHATSAPP_TELEFONO: ${{ secrets.WHATSAPP_TELEFONO }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
-        run: |
-          set +e   # NO cortar ante el primer error: manejamos los codigos a mano
-          fin=$((SECONDS + 19800))   # ~5,5 h
-          fallos=0
-          while [ $SECONDS -lt $fin ]; do
-            salida=$(python vacantes.py 2>&1); code=$?
-            echo "$salida"
-            if [ $code -eq 0 ]; then
-              fallos=0
-            elif [ $code -eq 2 ]; then
-              echo "Bloqueo detectado (ya avise por WhatsApp): corto la corrida."
-              exit 1
-            else
-              fallos=$((fallos + 1))
-              ultimo=$(echo "$salida" | grep -i "error" | tail -1)
-              if [ $fallos -ge 3 ]; then
-                echo "3 errores seguidos: aviso y corto."
-                curl -s -G "https://api.callmebot.com/whatsapp.php" \
-                  --data-urlencode "phone=$WHATSAPP_TELEFONO" \
-                  --data-urlencode "apikey=$WHATSAPP_APIKEY" \
-                  --data-urlencode "text=Monitor UADE fallando (3 barridos seguidos con error). Ultimo: $ultimo" >/dev/null || true
-                exit 1
-              fi
-            fi
-            sleep 60
-          done
+        run: python vacantes.py

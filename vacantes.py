@@ -16,13 +16,18 @@ Monitor de vacantes UADE — version para GitHub Actions (headless, sin PC prend
 Validado el 2026-07-06: detecta bien las vacantes (los 3 intensivos daban 20/16/18).
 
 Modo SOLO AVISO: detecta cupo y manda WhatsApp. No toca el carrito ni inscribe.
-El workflow repite el barrido en loop (cada ~5 min): aca NO hay while True.
+
+El script corre su PROPIO loop interno (un barrido cada ~60s por ~5,5 h) reusando
+UN solo Chrome. Antes se lanzaba un Chrome por barrido y, cada minuto por horas,
+se acumulaban procesos zombie hasta colgar el runner (timeouts en cadena). Con un
+navegador unico eso se evita; solo se recrea si se rompe. El workflow lo lanza y
+lo relanza cuando termina.
 """
 import os
 import re
 import sys
 import base64
-from time import sleep
+from time import sleep, monotonic
 
 import requests
 from bs4 import BeautifulSoup
@@ -46,6 +51,11 @@ WHATSAPP_APIKEY   = os.environ.get('WHATSAPP_APIKEY', '')
 # Se copia de la barra de direcciones estando logueada en la pantalla de buscar
 # clases. Es durable pero apunta a un anio/cuatrimestre fijo.
 PARAM_URL = os.environ.get('PARAM_URL', '')
+
+# Loop interno: cuanto dura la corrida y cada cuanto barre. ~2 min es el punto
+# justo: rapido para agarrar un cupo, gentil con el portal y el runner.
+LOOP_SECONDS = int(os.environ.get('LOOP_SECONDS', '19800'))   # ~5,5 h
+INTERVALO = int(os.environ.get('INTERVALO_SEG', '120'))       # segundos entre barridos
 
 # Turnos a recorrer (valores del combo cboTurno).
 TURNOS = {
@@ -195,17 +205,22 @@ def leer_grilla(html):
     return hallazgos
 
 
-def barrido(browser):
-    if not PARAM_URL:
-        raise RuntimeError("Falta PARAM_URL (la URL con ?param= del 2026).")
+def entrar_y_seleccionar(browser):
+    """Navega al param y selecciona las 6 materias. Se hace cada barrido para
+    asegurar el estado (mismo navegador, sin relanzar Chrome)."""
     browser.get(PARAM_URL)
     sleep(3)
     if es_bloqueo(browser.page_source):
         raise Bloqueo("el portal rechazo el acceso (WAF / 401 / 403).")
     if seleccionar_materias_objetivo(browser) == 0:
         raise Bloqueo("no pude entrar ni seleccionar materias (param vencido o bloqueo?).")
-    procesadas = set()
-    resultados = []
+
+
+def buscar_turnos(browser):
+    """Recorre los turnos y devuelve dict clave -> (desc, vac, detalle) con cupo.
+    Si un turno falla y no hubo NINGUN resultado, lanza error para reintentar
+    (no reportar 'sin vacantes' en falso)."""
+    hallazgos = {}
     errores = 0
     for valor, nombre in TURNOS.items():
         try:
@@ -218,21 +233,15 @@ def barrido(browser):
             sleep(5)
             if es_bloqueo(browser.page_source):
                 raise Bloqueo("el portal rechazo la busqueda (WAF).")
-            for clave, (desc, vac, det) in leer_grilla(browser.page_source).items():
-                if clave in procesadas:
-                    continue
-                procesadas.add(clave)
-                resultados.append((desc, vac, det))
+            hallazgos.update(leer_grilla(browser.page_source))
         except Bloqueo:
             raise
         except Exception as e:
             errores += 1
             print(f"Turno {nombre}: error ({e})")
-    # Si algun turno fallo y no encontramos NADA, NO digamos "sin vacantes": puede
-    # haber cupo que no vimos. Fallamos para que el workflow reintente.
-    if errores and not resultados:
+    if errores and not hallazgos:
         raise RuntimeError(f"{errores} turno(s) fallaron sin resultados; reintentar.")
-    return resultados
+    return hallazgos
 
 
 def validar_config():
@@ -244,34 +253,69 @@ def validar_config():
         sys.exit(1)
 
 
-def main():
-    browser = None
+def cerrar(browser):
     try:
-        validar_config()
-        browser = armar_browser()
-        resultados = barrido(browser)
-        if resultados:
-            for i, (desc, vac, detalle) in enumerate(resultados):
-                msg = f"Se libero cupo en {desc}: {vac}. Anda a inscribirte. [{detalle}]"
-                print(msg)
-                send_msg(msg)
-                if i < len(resultados) - 1:
-                    sleep(5)   # separar los WhatsApp (rate limit de CallMeBot)
-        else:
-            print("Barrido ok: sin vacantes nuevas en las materias objetivo.")
-    except Bloqueo as e:
-        aviso = (f"ALERTA monitor UADE: posible BLOQUEO del portal ({e}) "
-                 "El monitor se frena. Revisa tu acceso y reintenta mas tarde.")
-        print(aviso)
-        send_msg(aviso)
-        sys.exit(2)          # exit 2 = bloqueo -> el workflow corta la corrida
-    except Exception as e:
-        print(f"Error transitorio en el barrido: {e}")
-        sys.exit(1)          # exit 1 = error transitorio -> el workflow reintenta
-    finally:
         if browser is not None:
             browser.quit()
+    except Exception:
+        pass
+
+
+def main():
+    validar_config()
+    deadline = monotonic() + LOOP_SECONDS
+    browser = None
+    ya_avisadas = set()   # dedupe: no re-avisar la misma clase dentro de la corrida
+    fallos = 0
+    print(f"Monitor iniciado: barrido cada {INTERVALO}s por ~{LOOP_SECONDS // 60} min.")
+    while monotonic() < deadline:
+        try:
+            if browser is None:
+                browser = armar_browser()
+            entrar_y_seleccionar(browser)
+            hallazgos = buscar_turnos(browser)
+            nuevas = [(k, v) for k, v in hallazgos.items() if k not in ya_avisadas]
+            if nuevas:
+                for i, (clave, (desc, vac, det)) in enumerate(nuevas):
+                    ya_avisadas.add(clave)
+                    msg = f"Se libero cupo en {desc}: {vac}. Anda a inscribirte. [{det}]"
+                    print(msg)
+                    send_msg(msg)
+                    if i < len(nuevas) - 1:
+                        sleep(5)   # separar WhatsApp (rate limit de CallMeBot)
+            else:
+                print("Ciclo ok: sin vacantes nuevas.")
+            fallos = 0
+        except Bloqueo as e:
+            aviso = (f"ALERTA monitor UADE: posible BLOQUEO del portal ({e}) "
+                     "El monitor se frena. Revisa tu acceso y reintenta mas tarde.")
+            print(aviso)
+            send_msg(aviso)
+            cerrar(browser)
+            sys.exit(2)          # exit 2 = bloqueo -> el workflow corta
+        except Exception as e:
+            fallos += 1
+            print(f"Error transitorio (fallos seguidos={fallos}): {e}")
+            cerrar(browser)
+            browser = None       # recrear Chrome limpio en el proximo ciclo
+            if fallos >= 5:
+                send_msg(f"Monitor UADE fallando: {fallos} ciclos seguidos con error. "
+                         f"Se detiene. Ultimo: {e}")
+                sys.exit(1)
+        sleep(INTERVALO)
+    cerrar(browser)
+    print("Loop completado (~5,5 h).")
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"Error fatal: {e}")
+        try:
+            send_msg(f"Monitor UADE: error fatal, se detuvo. {e}")
+        except Exception:
+            pass
+        sys.exit(1)

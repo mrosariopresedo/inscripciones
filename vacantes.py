@@ -170,10 +170,28 @@ def seleccionar_materias_objetivo(browser):
     return seleccionadas
 
 
+# Dia de cursada: cada fila trae inputs ocultos hiddenLU/MA/MI/JU/VI/SA; el del
+# dia de la clase tiene value="True".
+DIAS = {'hiddenLU': 'Lunes', 'hiddenMA': 'Martes', 'hiddenMI': 'Miércoles',
+        'hiddenJU': 'Jueves', 'hiddenVI': 'Viernes', 'hiddenSA': 'Sábado'}
+
+
+def dia_de_fila(fila):
+    if not fila:
+        return ''
+    dias = []
+    for key, nombre in DIAS.items():
+        inp = fila.find('input', id=re.compile(key))
+        if inp and (inp.get('value') or '').strip().lower() == 'true':
+            dias.append(nombre)
+    return ' y '.join(dias)
+
+
 def leer_grilla(html):
-    """Devuelve dict num_clase -> (desc, vacantes, detalle) de materias objetivo
-    con cupo > 0. La vacante esta en <td class="tdvacantes"> (lblVacantesLibresAI);
-    el id trae grdClases_N -> lblMateriaDescripcion_N."""
+    """Devuelve dict num_clase -> (desc, vacantes, dia, sede, detalle) de materias
+    objetivo con cupo > 0. La vacante esta en <td class="tdvacantes">
+    (lblVacantesLibresAI); el id trae grdClases_N -> lblMateriaDescripcion_N.
+    dia = dia(s) de cursada segun los inputs hiddenXX; sede = lblSede de la fila."""
     soup = BeautifulSoup(html, 'html.parser')
     hallazgos = {}
     for td in soup.select('td.tdvacantes'):
@@ -198,10 +216,13 @@ def leer_grilla(html):
         detalle = ' '.join(fila.get_text(' ', strip=True).split()) if fila else ''
         if EXCLUIR_INTENSIVOS and any(k in detalle.upper() for k in EXCLUIR_KEYWORDS):
             continue
+        dia = dia_de_fila(fila)
+        sede_el = fila.find(id=re.compile(r'lblSede')) if fila else None
+        sede = sede_el.get_text(strip=True) if sede_el else ''
         # numero de clase = primer numero de 3+ digitos del detalle (dedupe key)
         mnum = re.search(r'\b(\d{3,})\b', detalle)
         clave = mnum.group(1) if mnum else detalle[:20]
-        hallazgos[clave] = (desc, vac, detalle)
+        hallazgos[clave] = (desc, vac, dia, sede, detalle)
     return hallazgos
 
 
@@ -276,9 +297,12 @@ def main():
             hallazgos = buscar_turnos(browser)
             nuevas = [(k, v) for k, v in hallazgos.items() if k not in ya_avisadas]
             if nuevas:
-                for i, (clave, (desc, vac, det)) in enumerate(nuevas):
+                for i, (clave, (desc, vac, dia, sede, det)) in enumerate(nuevas):
                     ya_avisadas.add(clave)
-                    msg = f"Se libero cupo en {desc}: {vac}. Anda a inscribirte. [{det}]"
+                    dia_txt = dia if dia else "ver detalle"
+                    sede_txt = sede if sede else "ver detalle"
+                    msg = (f"Se libero cupo en {desc} — {sede_txt}, dia {dia_txt}: "
+                           f"{vac} cupos. Anda a inscribirte. [{det}]")
                     print(msg)
                     send_msg(msg)
                     if i < len(nuevas) - 1:

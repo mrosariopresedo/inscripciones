@@ -188,10 +188,10 @@ def dia_de_fila(fila):
 
 
 def leer_grilla(html):
-    """Devuelve dict num_clase -> (desc, vacantes, dia, sede, detalle) de materias
-    objetivo con cupo > 0. La vacante esta en <td class="tdvacantes">
-    (lblVacantesLibresAI); el id trae grdClases_N -> lblMateriaDescripcion_N.
-    dia = dia(s) de cursada segun los inputs hiddenXX; sede = lblSede de la fila."""
+    """Devuelve dict num_clase -> (desc, vacantes, dia, sede) de materias objetivo
+    con cupo > 0. La vacante esta en <td class="tdvacantes"> (lblVacantesLibresAI);
+    el id trae grdClases_N -> lblMateriaDescripcion_N. dia = dia(s) de cursada
+    segun los inputs hiddenXX; sede = lblSede de la fila."""
     soup = BeautifulSoup(html, 'html.parser')
     hallazgos = {}
     for td in soup.select('td.tdvacantes'):
@@ -222,7 +222,7 @@ def leer_grilla(html):
         # numero de clase = primer numero de 3+ digitos del detalle (dedupe key)
         mnum = re.search(r'\b(\d{3,})\b', detalle)
         clave = mnum.group(1) if mnum else detalle[:20]
-        hallazgos[clave] = (desc, vac, dia, sede, detalle)
+        hallazgos[clave] = (desc, vac, dia, sede)
     return hallazgos
 
 
@@ -297,12 +297,12 @@ def main():
             hallazgos = buscar_turnos(browser)
             nuevas = [(k, v) for k, v in hallazgos.items() if k not in ya_avisadas]
             if nuevas:
-                for i, (clave, (desc, vac, dia, sede, det)) in enumerate(nuevas):
+                for i, (clave, (desc, vac, dia, sede)) in enumerate(nuevas):
                     ya_avisadas.add(clave)
-                    dia_txt = dia if dia else "ver detalle"
-                    sede_txt = sede if sede else "ver detalle"
-                    msg = (f"Se libero cupo en {desc} — {sede_txt}, dia {dia_txt}: "
-                           f"{vac} cupos. Anda a inscribirte. [{det}]")
+                    dia_txt = dia if dia else "ver dia en el portal"
+                    sede_txt = sede if sede else "ver sede en el portal"
+                    msg = (f"Cupo liberado: {desc} — {sede_txt}, {dia_txt} — "
+                           f"{vac} cupos. Anda a inscribirte.")
                     print(msg)
                     send_msg(msg)
                     if i < len(nuevas) - 1:

@@ -13,7 +13,7 @@ on:
 
 concurrency:
   group: monitor-vacantes
-  cancel-in-progress: false
+  cancel-in-progress: true   # una sola corrida a la vez (evita solapes y avisos duplicados)
 
 jobs:
   vacantes:
